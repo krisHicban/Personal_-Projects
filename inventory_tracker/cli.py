@@ -7,14 +7,24 @@ import sys
 from pathlib import Path
 
 from .db import connect
-from .repository import STATUSES, add_item, list_items, update_status
+from .repository import (
+    STATUSES,
+    add_item,
+    get_item,
+    item_profit,
+    list_items,
+    profit_report,
+    record_sale,
+    update_item,
+    update_status,
+)
 
 
 DEFAULT_DATABASE = Path("inventory.db")
 CSV_FIELDS = (
     "id", "title", "platform", "category", "size", "condition",
-    "purchase_price", "listing_price", "status", "listing_url", "notes",
-    "created_at", "updated_at",
+    "purchase_price", "listing_price", "sold_price", "shipping_cost",
+    "platform_fee", "status", "listing_url", "notes", "created_at", "updated_at", "sold_at",
 )
 
 
@@ -42,6 +52,33 @@ def build_parser() -> argparse.ArgumentParser:
     status = commands.add_parser("status", help="Change an item's status")
     status.add_argument("item_id", type=int)
     status.add_argument("value", choices=STATUSES)
+
+    archive = commands.add_parser("archive", help="Archive an inventory item")
+    archive.add_argument("item_id", type=int)
+
+    sell = commands.add_parser("sell", help="Record a sale")
+    sell.add_argument("item_id", type=int)
+    sell.add_argument("--price", type=float, required=True, dest="sold_price")
+    sell.add_argument("--shipping", type=float, default=0, dest="shipping_cost")
+    sell.add_argument("--fee", type=float, default=0, dest="platform_fee")
+
+    profit = commands.add_parser("profit", help="Show profit for an item")
+    profit.add_argument("item_id", type=int)
+
+    commands.add_parser("report", help="Show an inventory profit report")
+
+    edit = commands.add_parser("edit", help="Edit an inventory item")
+    edit.add_argument("item_id", type=int)
+    edit.add_argument("--title")
+    edit.add_argument("--platform")
+    edit.add_argument("--category")
+    edit.add_argument("--size")
+    edit.add_argument("--condition")
+    edit.add_argument("--purchase-price", type=float)
+    edit.add_argument("--listing-price", type=float)
+    edit.add_argument("--status", choices=STATUSES)
+    edit.add_argument("--url", dest="listing_url")
+    edit.add_argument("--notes")
     return parser
 
 
@@ -94,6 +131,56 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Item #{args.item_id} was not found.", file=sys.stderr)
                     return 1
                 print(f"Updated item #{args.item_id} to {args.value}.")
+            elif args.command == "archive":
+                if not update_status(connection, args.item_id, "archived"):
+                    print(f"Item #{args.item_id} was not found.", file=sys.stderr)
+                    return 1
+                print(f"Archived item #{args.item_id}.")
+            elif args.command == "sell":
+                if not record_sale(
+                    connection, args.item_id, args.sold_price,
+                    args.shipping_cost, args.platform_fee,
+                ):
+                    print(f"Item #{args.item_id} was not found.", file=sys.stderr)
+                    return 1
+                print(f"Recorded sale for item #{args.item_id}.")
+            elif args.command == "profit":
+                item = get_item(connection, args.item_id)
+                if item is None:
+                    print(f"Item #{args.item_id} was not found.", file=sys.stderr)
+                    return 1
+                profit = item_profit(item)
+                if profit is None:
+                    print("Profit cannot be calculated until purchase and sale/listing prices are set.", file=sys.stderr)
+                    return 1
+                label = "Realized profit" if item["status"] == "sold" else "Estimated profit"
+                print(f"{label} for item #{args.item_id}: {profit:.2f}")
+            elif args.command == "report":
+                report = profit_report(connection)
+                print("Inventory Report")
+                print("----------------")
+                print(f"Items: {report['items']}")
+                print(f"Sold items: {report['sold_items']}")
+                print(f"Purchase cost: {report['purchase_cost']:.2f}")
+                print(f"Sales revenue: {report['revenue']:.2f}")
+                print(f"Shipping costs: {report['shipping']:.2f}")
+                print(f"Platform fees: {report['fees']:.2f}")
+                print(f"Realized profit: {report['realized_profit']:.2f}")
+                print(f"Estimated active profit: {report['estimated_profit']:.2f}")
+            elif args.command == "edit":
+                values = {
+                    key: value.strip() if isinstance(value, str) else value
+                    for key, value in vars(args).items()
+                    if key in {
+                        "title", "platform", "category", "size", "condition",
+                        "purchase_price", "listing_price", "status", "listing_url", "notes",
+                    }
+                    and value is not None
+                }
+                if not update_item(connection, args.item_id, values):
+                    print(f"Item #{args.item_id} was not found.", file=sys.stderr)
+                    return 1
+                print(f"Updated item #{args.item_id}.")
     except (OSError, sqlite3.Error, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
