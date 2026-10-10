@@ -12,9 +12,10 @@ CREATE TABLE IF NOT EXISTS items (
     category TEXT,
     size TEXT,
     condition TEXT,
-    purchase_price REAL,
-    listing_price REAL,
-    status TEXT NOT NULL DEFAULT 'draft',
+    purchase_price REAL CHECK (purchase_price IS NULL OR purchase_price >= 0),
+    listing_price REAL CHECK (listing_price IS NULL OR listing_price >= 0),
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'listed', 'sold', 'reserved', 'archived')),
     listing_url TEXT,
     notes TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

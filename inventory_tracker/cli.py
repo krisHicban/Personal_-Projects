@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sqlite3
 import sys
 from pathlib import Path
 
 from .db import connect
-from .repository import add_item, list_items, update_status
+from .repository import STATUSES, add_item, list_items, update_status
 
 
 DEFAULT_DATABASE = Path("inventory.db")
-STATUSES = ("draft", "listed", "sold", "reserved", "archived")
+CSV_FIELDS = (
+    "id", "title", "platform", "category", "size", "condition",
+    "purchase_price", "listing_price", "status", "listing_url", "notes",
+    "created_at", "updated_at",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,35 +61,42 @@ def print_items(items) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    with connect(args.database) as connection:
-        if args.command == "add":
-            values = {
-                key: value
-                for key, value in vars(args).items()
-                if key in {
-                    "title", "platform", "category", "size", "condition",
-                    "purchase_price", "listing_price", "status", "listing_url", "notes",
+    try:
+        if args.command == "list" and args.csv:
+            if args.csv.resolve() == args.database.resolve():
+                print("CSV output path must differ from the database path.", file=sys.stderr)
+                return 2
+        with connect(args.database) as connection:
+            if args.command == "add":
+                values = {
+                    key: value.strip() if isinstance(value, str) else value
+                    for key, value in vars(args).items()
+                    if key in {
+                        "title", "platform", "category", "size", "condition",
+                        "purchase_price", "listing_price", "status", "listing_url", "notes",
+                    }
+                    and value is not None
                 }
-                and value is not None
-            }
-            item_id = add_item(connection, values)
-            print(f"Added item #{item_id}: {args.title}")
-        elif args.command == "list":
-            items = list_items(connection, args.status)
-            if args.csv:
-                with args.csv.open("w", newline="", encoding="utf-8") as output:
-                    writer = csv.DictWriter(output, fieldnames=items[0].keys() if items else [])
-                    if items:
+                item_id = add_item(connection, values)
+                print(f"Added item #{item_id}: {values['title']}")
+            elif args.command == "list":
+                items = list_items(connection, args.status)
+                if args.csv:
+                    with args.csv.open("w", newline="", encoding="utf-8") as output:
+                        writer = csv.DictWriter(output, fieldnames=CSV_FIELDS)
                         writer.writeheader()
                         writer.writerows(dict(item) for item in items)
-                print(f"Exported {len(items)} item(s) to {args.csv}")
-            else:
-                print_items(items)
-        elif args.command == "status":
-            if not update_status(connection, args.item_id, args.value):
-                print(f"Item #{args.item_id} was not found.", file=sys.stderr)
-                return 1
-            print(f"Updated item #{args.item_id} to {args.value}.")
+                    print(f"Exported {len(items)} item(s) to {args.csv}")
+                else:
+                    print_items(items)
+            elif args.command == "status":
+                if not update_status(connection, args.item_id, args.value):
+                    print(f"Item #{args.item_id} was not found.", file=sys.stderr)
+                    return 1
+                print(f"Updated item #{args.item_id} to {args.value}.")
+    except (OSError, sqlite3.Error, ValueError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
     return 0
 
 

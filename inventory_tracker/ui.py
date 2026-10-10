@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -125,15 +126,27 @@ class InventoryApp(tk.Tk):
         except ValueError:
             messagebox.showerror("Invalid price", "Prices must be numbers, for example 24.99.")
             return
-        with connect(self.database) as connection:
-            item_id = add_item(connection, {key: value for key, value in values.items() if value is not None})
+        try:
+            with connect(self.database) as connection:
+                item_id = add_item(
+                    connection,
+                    {key: value for key, value in values.items() if value is not None},
+                )
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Invalid item", str(error))
+            return
         self._clear_form()
         self.refresh_items()
         messagebox.showinfo("Item added", f"Added item #{item_id}.")
 
     @staticmethod
     def _price(value: str) -> float | None:
-        return float(value) if value.strip() else None
+        if not value.strip():
+            return None
+        price = float(value)
+        if not math.isfinite(price) or price < 0:
+            raise ValueError
+        return price
 
     def _clear_form(self) -> None:
         for variable in (
