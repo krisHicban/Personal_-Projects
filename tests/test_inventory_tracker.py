@@ -53,6 +53,23 @@ class InventoryTrackerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 update_status(connection, item_id, "unknown")
 
+    def test_only_record_sale_can_assign_sold_status(self) -> None:
+        with connect(self.database) as connection:
+            with self.assertRaises(ValueError):
+                add_item(connection, {"title": "Jacket", "status": "sold"})
+            item_id = add_item(connection, {"title": "Jacket", "purchase_price": 10})
+            with self.assertRaises(ValueError):
+                update_status(connection, item_id, "sold")
+
+    def test_sold_items_cannot_be_reopened_by_status_change(self) -> None:
+        with connect(self.database) as connection:
+            item_id = add_item(connection, {"title": "Jacket", "purchase_price": 10})
+            record_sale(connection, item_id, 20)
+            with self.assertRaises(ValueError):
+                update_status(connection, item_id, "listed")
+            with self.assertRaises(ValueError):
+                update_item(connection, item_id, {"status": "listed"})
+
     def test_edit_item_updates_fields(self) -> None:
         with connect(self.database) as connection:
             item_id = add_item(connection, {"title": "Jacket", "listing_price": 20})
@@ -99,6 +116,16 @@ class InventoryTrackerTests(unittest.TestCase):
         self.assertEqual(item_profit(item), 19)
         self.assertEqual(report["realized_profit"], 19)
         self.assertEqual(report["revenue"], 40)
+
+    def test_money_values_are_normalized_to_cents(self) -> None:
+        with connect(self.database) as connection:
+            item_id = add_item(
+                connection,
+                {"title": "Jacket", "purchase_price": 10.005, "listing_price": 20.006},
+            )
+            item = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        self.assertEqual(item["purchase_price"], 10.01)
+        self.assertEqual(item["listing_price"], 20.01)
 
     def test_sale_requires_purchase_price_and_valid_active_item(self) -> None:
         with connect(self.database) as connection:
@@ -151,6 +178,19 @@ class InventoryTrackerTests(unittest.TestCase):
         self.assertTrue({"sold_price", "shipping_cost", "platform_fee", "sold_at"} <= columns)
         self.assertEqual(item["shipping_cost"], 0)
         self.assertEqual(item["platform_fee"], 0)
+
+    def test_legacy_database_gets_all_required_columns(self) -> None:
+        connection = sqlite3.connect(self.database)
+        try:
+            connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
+            connection.commit()
+        finally:
+            connection.close()
+        with connect(self.database) as connection:
+            item_id = add_item(connection, {"title": "New jacket"})
+            item = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        self.assertEqual(item["platform"], "vinted")
+        self.assertEqual(item["status"], "draft")
 
     def test_empty_csv_has_headers(self) -> None:
         output = Path(self.temp_dir.name) / "items.csv"

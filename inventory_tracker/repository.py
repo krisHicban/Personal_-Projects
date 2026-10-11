@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from numbers import Real
 from typing import Any
 
@@ -40,7 +40,7 @@ def _validate_price(values: dict[str, Any], key: str) -> None:
     value = float(value)
     if not math.isfinite(value) or value < 0:
         raise ValueError(f"{key} must be a non-negative finite number")
-    values[key] = value
+    values[key] = float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def _validate_item_values(values: dict[str, Any]) -> None:
@@ -61,6 +61,8 @@ def _validate_item_values(values: dict[str, Any]) -> None:
 def add_item(connection: sqlite3.Connection, values: dict[str, Any]) -> int:
     values = dict(values)
     _validate_item_values(values)
+    if values.get("status", "draft") == "sold":
+        raise ValueError("use record_sale to mark an item sold")
 
     cursor = connection.execute(
         """INSERT INTO items (
@@ -96,6 +98,10 @@ def update_item(connection: sqlite3.Connection, item_id: int, values: dict[str, 
     merged = {field: existing[field] for field in ITEM_FIELDS}
     merged.update(values)
     _validate_item_values(merged)
+    if existing["status"] == "sold" and merged["status"] != "sold":
+        raise ValueError("sold items cannot be reopened by changing status")
+    if existing["status"] != "sold" and merged["status"] == "sold":
+        raise ValueError("use record_sale to mark an item sold")
 
     assignments = ", ".join(f"{field} = ?" for field in values)
     parameters = [merged[field] for field in values]
@@ -119,6 +125,13 @@ def list_items(connection: sqlite3.Connection, status: str | None = None):
 def update_status(connection: sqlite3.Connection, item_id: int, status: str) -> bool:
     if status not in STATUSES:
         raise ValueError(f"status must be one of: {', '.join(STATUSES)}")
+    current = connection.execute("SELECT status FROM items WHERE id = ?", (item_id,)).fetchone()
+    if current is None:
+        return False
+    if status == "sold" and current["status"] != "sold":
+        raise ValueError("use record_sale to mark an item sold")
+    if current["status"] == "sold" and status != "sold":
+        raise ValueError("sold items cannot be reopened by changing status")
     cursor = connection.execute(
         "UPDATE items SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         (status, item_id),
@@ -133,7 +146,7 @@ def _validate_money(value: Any, field: str) -> float:
     value = float(value)
     if not math.isfinite(value) or value < 0:
         raise ValueError(f"{field} must be a non-negative finite number")
-    return value
+    return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def record_sale(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import csv
+import sqlite3
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -168,6 +169,9 @@ class InventoryApp(tk.Tk):
                 "listing_url": self.url_value.get().strip() or None,
                 "notes": self.notes_value.get().strip() or None,
             }
+            if values["status"] == "sold":
+                messagebox.showinfo("Record sale", "Use the sale controls to record a sale.")
+                return
         except ValueError:
             messagebox.showerror("Invalid price", "Prices must be numbers, for example 24.99.")
             return
@@ -177,7 +181,7 @@ class InventoryApp(tk.Tk):
                     connection,
                     {key: value for key, value in values.items() if value is not None},
                 )
-        except (OSError, ValueError) as error:
+        except (OSError, sqlite3.Error, ValueError) as error:
             messagebox.showerror("Invalid item", str(error))
             return
         self._clear_form()
@@ -203,8 +207,12 @@ class InventoryApp(tk.Tk):
 
     def refresh_items(self) -> None:
         status = self.filter_value.get()
-        with connect(self.database) as connection:
-            items = list_items(connection, None if status == "all" else status)
+        try:
+            with connect(self.database) as connection:
+                items = list_items(connection, None if status == "all" else status)
+        except (OSError, sqlite3.Error) as error:
+            messagebox.showerror("Could not load inventory", str(error))
+            return
         platforms = ("all", *sorted({item["platform"] for item in items if item["platform"]}))
         self.platform_box.configure(values=platforms)
         if self.platform_filter_value.get() not in platforms:
@@ -270,24 +278,32 @@ class InventoryApp(tk.Tk):
         if output.resolve() == self.database.resolve():
             messagebox.showerror("Invalid export", "The CSV path must differ from the database path.")
             return
-        with output.open("w", newline="", encoding="utf-8") as file:
-            writer = csv.DictWriter(file, fieldnames=CSV_FIELDS)
-            writer.writeheader()
-            rows = []
-            for item in self.visible_items:
-                row = dict(item)
-                profit = item_profit(item)
-                row["profit"] = "" if profit is None else f"{profit:.2f}"
-                rows.append(row)
-            writer.writerows(rows)
+        try:
+            with output.open("w", newline="", encoding="utf-8") as file:
+                writer = csv.DictWriter(file, fieldnames=CSV_FIELDS)
+                writer.writeheader()
+                rows = []
+                for item in self.visible_items:
+                    row = dict(item)
+                    profit = item_profit(item)
+                    row["profit"] = "" if profit is None else f"{profit:.2f}"
+                    rows.append(row)
+                writer.writerows(rows)
+        except OSError as error:
+            messagebox.showerror("Export failed", str(error))
+            return
         messagebox.showinfo("Export complete", f"Exported {len(self.visible_items)} item(s).")
 
     def edit_selected_item(self) -> None:
         item_id = self._selected_item_id()
         if item_id is None:
             return
-        with connect(self.database) as connection:
-            item = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        try:
+            with connect(self.database) as connection:
+                item = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        except (OSError, sqlite3.Error) as error:
+            messagebox.showerror("Could not load item", str(error))
+            return
         if item is None:
             messagebox.showerror("Missing item", f"Item #{item_id} was not found.")
             return
@@ -332,10 +348,14 @@ class InventoryApp(tk.Tk):
                 changes["purchase_price"] = self._price(values["purchase_price"].get())
                 changes["listing_price"] = self._price(values["listing_price"].get())
                 changes["status"] = status.get()
+                if changes["status"] == "sold" and item["status"] != "sold":
+                    raise ValueError("Use Record sale to mark an item sold")
+                if item["status"] == "sold" and changes["status"] != "sold":
+                    raise ValueError("Sold items cannot be reopened by changing status")
                 with connect(self.database) as connection:
                     if not update_item(connection, item_id, changes):
                         raise ValueError(f"Item #{item_id} was not found")
-            except (OSError, ValueError) as error:
+            except (OSError, sqlite3.Error, ValueError) as error:
                 messagebox.showerror("Could not save item", str(error), parent=window)
                 return
             window.destroy()
@@ -347,8 +367,12 @@ class InventoryApp(tk.Tk):
         ttk.Button(buttons, text="Save changes", command=save).pack(side="left", padx=4)
 
     def show_profit_report(self) -> None:
-        with connect(self.database) as connection:
-            report = profit_report(connection)
+        try:
+            with connect(self.database) as connection:
+                report = profit_report(connection)
+        except (OSError, sqlite3.Error) as error:
+            messagebox.showerror("Could not load report", str(error))
+            return
         window = tk.Toplevel(self)
         window.title("Inventory Profit Report")
         window.transient(self)
@@ -379,8 +403,14 @@ class InventoryApp(tk.Tk):
             )
             return
         item_id = int(selected[0])
-        with connect(self.database) as connection:
-            update_status(connection, item_id, self.selected_status.get())
+        try:
+            with connect(self.database) as connection:
+                if not update_status(connection, item_id, self.selected_status.get()):
+                    messagebox.showerror("Missing item", f"Item #{item_id} was not found.")
+                    return
+        except (OSError, sqlite3.Error, ValueError) as error:
+            messagebox.showerror("Could not update status", str(error))
+            return
         self.refresh_items()
 
     def record_selected_sale(self) -> None:

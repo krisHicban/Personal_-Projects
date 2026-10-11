@@ -25,7 +25,10 @@ Run the graphical interface with:
 python3 -m inventory_tracker.ui
 ```
 
-The window lets you add items, view and filter inventory, and update item status.
+The window lets you add and edit items, search and filter inventory, sort the table,
+record sales, view profit reports, export CSV files, and update item status. Use the
+sale controls to mark an item sold; this records the sale price, shipping, fees, and
+realized profit together.
 
 ## Next steps
 
