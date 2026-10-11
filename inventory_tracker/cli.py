@@ -24,7 +24,7 @@ DEFAULT_DATABASE = Path("inventory.db")
 CSV_FIELDS = (
     "id", "title", "platform", "category", "size", "condition",
     "purchase_price", "listing_price", "sold_price", "shipping_cost",
-    "platform_fee", "status", "listing_url", "notes", "created_at", "updated_at", "sold_at",
+    "platform_fee", "profit", "status", "listing_url", "notes", "created_at", "updated_at", "sold_at",
 )
 
 
@@ -122,7 +122,13 @@ def main(argv: list[str] | None = None) -> int:
                     with args.csv.open("w", newline="", encoding="utf-8") as output:
                         writer = csv.DictWriter(output, fieldnames=CSV_FIELDS)
                         writer.writeheader()
-                        writer.writerows(dict(item) for item in items)
+                        rows = []
+                        for item in items:
+                            row = dict(item)
+                            profit = item_profit(item)
+                            row["profit"] = "" if profit is None else f"{profit:.2f}"
+                            rows.append(row)
+                        writer.writerows(rows)
                     print(f"Exported {len(items)} item(s) to {args.csv}")
                 else:
                     print_items(items)
